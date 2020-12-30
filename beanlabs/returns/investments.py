@@ -26,12 +26,13 @@ import typing
 
 import pandas
 
+from beancount.core.amount import Amount
 from beancount.core import account as accountlib
-from beancount.core import display_context
 from beancount.core import convert
 from beancount.core import data
+from beancount.core import display_context
 from beancount.core import getters
-from beancount.core.amount import Amount
+from beancount.core import prices
 from beancount.core.inventory import Inventory
 from beancount.parser import printer
 
@@ -167,7 +168,8 @@ def get_description(signature):
 
 
 def produce_cash_flows_general(entry: data.Directive,
-                               account: Account) -> List[CashFlow]:
+                               account: Account,
+                               price_map: prices.PriceMap) -> List[CashFlow]:
     """Produce cash flows using a generalized rule."""
     has_dividend = any(posting.meta["category"] == Cat.DIVIDEND
                        for posting in entry.postings)
@@ -175,16 +177,30 @@ def produce_cash_flows_general(entry: data.Directive,
     for posting in entry.postings:
         category = posting.meta["category"]
         if category == Cat.CASH:
-            assert not posting.cost
-            cf = CashFlow(entry.date, convert.get_weight(posting), has_dividend,
-                          "cash", account)
+            if posting.cost:
+                value = convert.get_value(posting, price_map, entry.date)
+                print(f"TODO: need price entry for {entry.date}. Using:", value)
+                print(posting)
+                print()
+            else:
+                value = convert.get_weight(posting)
+            cf = CashFlow(entry.date, value, has_dividend, "cash", account)
             posting.meta["flow"] = cf
             flows.append(cf)
 
         elif category == Cat.OTHERASSET:
+
             # If the account deposits other assets, count this as an outflow.
-            cf = CashFlow(entry.date, convert.get_weight(posting), False,
-                          "other", account)
+
+            # Use market value (or as close to it as possible). TODO: consider informing the user that a prive
+            # entry for the date is required for accurate, even meaningful results. For cases where this is
+            # considered together in a group with the account that is on the other side of this transfer, the
+            # market value doesn't matter as they cancel each other out in the cashflow
+
+            value = convert.get_value(posting, price_map, entry.date)
+            print("Using value for OTHERASSET:", value, posting)
+
+            cf = CashFlow(entry.date, value, False, "other", account)
             posting.meta["flow"] = cf
             flows.append(cf)
 
@@ -336,6 +352,7 @@ def extract_transactions_for_account(entries: data.Entries,
 def process_account_entries(entries: data.Entries,
                             config: InvestmentConfig,
                             investment: Investment,
+                            price_map: prices.PriceMap,
                             check_explicit_flows: bool) -> AccountData:
     """Process a single account."""
     account = investment.asset_account
@@ -373,7 +390,7 @@ def process_account_entries(entries: data.Entries,
                     balance.add_position(posting)
 
         # Compute the cash flows associated with the transaction.
-        flows_general = produce_cash_flows_general(entry, account)
+        flows_general = produce_cash_flows_general(entry, account, price_map)
         if check_explicit_flows:
             # Attempt the explicit method.
             flows_explicit = produce_cash_flows_explicit(entry, account)
@@ -535,7 +552,8 @@ def extract(entries: data.Entries,
             config: Config,
             end_date: Date,
             check_explicit_flows: bool,
-            output_dir: str) -> Dict[Account, AccountData]:
+            output_dir: str,
+            price_map: prices.PriceMap) -> Dict[Account, AccountData]:
     """Extract data from the list of entries."""
     # Note: It might be useful to have an option for "the end of its history"
     # for Ledger that aren't updated up to today.
@@ -551,7 +569,7 @@ def extract(entries: data.Entries,
 
     # Process all the accounts.
     account_data = [process_account_entries(pruned_entries, config.investments, aconfig,
-                                            check_explicit_flows)
+                                            price_map, check_explicit_flows)
                     for aconfig in config.investments.investment]
     account_data = list(filter(None, account_data))
     account_data_map = {ad.account: ad for ad in account_data}

@@ -76,15 +76,17 @@ def main():
     with open(path.join(args.output, "config.pbtxt"), "w") as efile:
         print(config, file=efile)
 
+    price_map = prices.build_price_map(entries)
+
     # Extract data from the ledger.
     account_data_map = investments.extract(
         entries, dcontext, config, end_date, args.check_explicit_flows,
-        path.join(args.output, "investments"))
+        path.join(args.output, "investments"), price_map)
 
     # Generate output reports.
     output_reports = path.join(args.output, "groups")
     pricer = reports.generate_reports(account_data_map, config,
-                                      prices.build_price_map(entries),
+                                      price_map,
                                       end_date,
                                       output_reports,
                                       args.parallel, args.pdf)
